@@ -4,7 +4,9 @@ Built with Streamlit, Agno, OpenAI, and Milvus
 
 Features:
 - Multi-document PDF upload and management
-- 5 specialized AI agents (Q&A, Summarizer, Researcher, Analyst, Translator)
+- 6 specialized AI agents (Q&A, Summarizer, Researcher, Analyst, Translator, Data Extractor)
+- PDF table extraction to CSV with pdfplumber
+- Chart/graph image analysis via GPT-4o Vision
 - Streaming responses with real-time token display
 - Model selection (GPT-4o-mini, GPT-4o, GPT-4-turbo)
 - AI-generated follow-up question suggestions
@@ -27,6 +29,11 @@ from agno.knowledge.pdf import PDFKnowledgeBase
 from agno.vectordb.milvus import Milvus
 
 from agents import create_agent, AGENT_CONFIGS, get_agent_options
+from data_extractor import (
+    extract_all,
+    analyze_chart_with_vision,
+    ExtractionResult,
+)
 
 # ---------------------------------------------------------------------------
 # Page Configuration
@@ -159,6 +166,8 @@ _DEFAULTS = {
     "document_summary": None,
     "suggestions": [],
     "last_suggestion_for": "",
+    "extraction_result": None,
+    "analyzed_images": {},
 }
 for _k, _v in _DEFAULTS.items():
     if _k not in st.session_state:
@@ -325,6 +334,8 @@ with st.sidebar:
             st.session_state.documents_loaded = False
             st.session_state.agent = None
             st.session_state.document_summary = None
+            st.session_state.extraction_result = None
+            st.session_state.analyzed_images = {}
 
         for uf in uploaded_files:
             size_mb = round(len(uf.getvalue()) / 1024 / 1024, 2)
@@ -359,6 +370,8 @@ with st.sidebar:
             st.session_state.agent = None
             st.session_state.processed_files = []
             st.session_state.document_summary = None
+            st.session_state.extraction_result = None
+            st.session_state.analyzed_images = {}
             st.session_state.suggestions = []
             st.rerun()
 
@@ -463,8 +476,8 @@ if not st.session_state.documents_loaded:
         )
     with col2:
         st.markdown(
-            '<div class="feature-card"><h3>🤖 5 AI Agents</h3>'
-            "<p>Switch between Q&A, Summarizer, Researcher, Analyst and Translator on the fly.</p></div>",
+            '<div class="feature-card"><h3>🤖 6 AI Agents</h3>'
+            "<p>Q&A, Summarizer, Researcher, Analyst, Translator and Data Extractor.</p></div>",
             unsafe_allow_html=True,
         )
     with col3:
@@ -490,8 +503,8 @@ if not st.session_state.documents_loaded:
         )
     with col6:
         st.markdown(
-            '<div class="feature-card"><h3>📊 Insights</h3>'
-            "<p>One-click summaries, FAQ generation, and critical analysis of your documents.</p></div>",
+            '<div class="feature-card"><h3>📊 Data Extraction</h3>'
+            "<p>Extract tables to CSV, analyze charts with GPT-4o Vision, and scrape structured data.</p></div>",
             unsafe_allow_html=True,
         )
 
@@ -500,7 +513,7 @@ if not st.session_state.documents_loaded:
 
 # ---- Document loaded – show tabs ----
 else:
-    tab_chat, tab_insights = st.tabs(["💬 Chat", "📊 Insights"])
+    tab_chat, tab_insights, tab_data = st.tabs(["💬 Chat", "📊 Insights", "🗃️ Data Extraction"])
 
     # ================================================================
     # CHAT TAB
@@ -731,3 +744,183 @@ else:
                 st.session_state.current_agent_type = "qa"
                 rebuild_agent()
                 st.rerun()
+
+    # ================================================================
+    # DATA EXTRACTION TAB
+    # ================================================================
+    with tab_data:
+        st.markdown("### Data Extraction")
+        st.markdown(
+            "Extract tables as CSV and analyze charts/graphs from your PDF documents. "
+            "Perfect for data analysts who need structured data from reports."
+        )
+
+        # Run extraction
+        if st.session_state.extraction_result is None:
+            if st.button("⚡ Extract Tables & Charts", type="primary", use_container_width=True):
+                with st.spinner("Scanning PDF for tables and charts..."):
+                    # Extract from all uploaded PDFs
+                    all_tables = []
+                    all_images = []
+                    total_pages = 0
+                    file_names = []
+
+                    for fname in st.session_state.processed_files:
+                        pdf_path = str(TEMP_DIR / fname)
+                        result = extract_all(pdf_path)
+                        # Tag tables/images with file name for multi-doc
+                        for t in result.tables:
+                            t._file_name = fname
+                        for img in result.images:
+                            img._file_name = fname
+                        all_tables.extend(result.tables)
+                        all_images.extend(result.images)
+                        total_pages += result.page_count
+                        file_names.append(fname)
+
+                    combined = ExtractionResult(
+                        file_name=", ".join(file_names),
+                        tables=all_tables,
+                        images=all_images,
+                        page_count=total_pages,
+                    )
+                    st.session_state.extraction_result = combined
+                    st.rerun()
+        else:
+            result = st.session_state.extraction_result
+
+            # Summary stats
+            st.markdown("---")
+            ec1, ec2, ec3 = st.columns(3)
+            with ec1:
+                st.markdown(
+                    f'<div class="stat-card"><h2>{len(result.tables)}</h2>'
+                    "<p>Tables Found</p></div>",
+                    unsafe_allow_html=True,
+                )
+            with ec2:
+                st.markdown(
+                    f'<div class="stat-card"><h2>{len(result.images)}</h2>'
+                    "<p>Charts/Images Found</p></div>",
+                    unsafe_allow_html=True,
+                )
+            with ec3:
+                st.markdown(
+                    f'<div class="stat-card"><h2>{result.page_count}</h2>'
+                    "<p>Pages Scanned</p></div>",
+                    unsafe_allow_html=True,
+                )
+
+            # Re-extract button
+            if st.button("🔄 Re-extract", use_container_width=False):
+                st.session_state.extraction_result = None
+                st.session_state.analyzed_images = {}
+                st.rerun()
+
+            st.markdown("---")
+
+            # ---- TABLES SECTION ----
+            if result.tables:
+                st.markdown("### Extracted Tables")
+
+                for i, table in enumerate(result.tables):
+                    file_label = getattr(table, "_file_name", "")
+                    header = f"📋 {file_label} — {table.label}" if file_label else f"📋 {table.label}"
+                    with st.expander(header, expanded=(i == 0)):
+                        st.dataframe(table.dataframe, use_container_width=True)
+
+                        col_csv, col_info = st.columns([1, 2])
+                        with col_csv:
+                            csv_data = table.to_csv()
+                            st.download_button(
+                                "📥 Download CSV",
+                                data=csv_data,
+                                file_name=f"table_p{table.page_number}_t{table.table_index + 1}.csv",
+                                mime="text/csv",
+                                key=f"csv_download_{i}",
+                                use_container_width=True,
+                            )
+                        with col_info:
+                            rows, cols = table.dataframe.shape
+                            st.caption(f"{rows} rows x {cols} columns")
+
+                # Download ALL tables as one CSV
+                if len(result.tables) > 1:
+                    st.markdown("---")
+                    import io
+                    combined_csv = io.StringIO()
+                    for j, tbl in enumerate(result.tables):
+                        file_label = getattr(tbl, "_file_name", "")
+                        combined_csv.write(f"# {file_label} - {tbl.label}\n")
+                        combined_csv.write(tbl.to_csv())
+                        combined_csv.write("\n\n")
+                    st.download_button(
+                        "📥 Download ALL Tables (Combined CSV)",
+                        data=combined_csv.getvalue(),
+                        file_name="all_tables_combined.csv",
+                        mime="text/csv",
+                        key="csv_download_all",
+                        use_container_width=True,
+                        type="primary",
+                    )
+            else:
+                st.info("No tables were detected in the uploaded PDF(s).")
+
+            st.markdown("---")
+
+            # ---- CHARTS / IMAGES SECTION ----
+            if result.images:
+                st.markdown("### Charts & Graphs")
+                st.markdown(
+                    "Click **Analyze with GPT-4o Vision** to extract numerical data from a chart. "
+                    "This sends the image to GPT-4o for analysis."
+                )
+
+                for i, img in enumerate(result.images):
+                    file_label = getattr(img, "_file_name", "")
+                    header = (
+                        f"🖼️ {file_label} — {img.label} ({img.width}x{img.height}px)"
+                        if file_label
+                        else f"🖼️ {img.label} ({img.width}x{img.height}px)"
+                    )
+                    with st.expander(header, expanded=False):
+                        # Show the image
+                        st.image(img.image_bytes, use_container_width=True)
+
+                        img_key = f"{file_label}_{img.page_number}_{img.image_index}"
+
+                        if img_key in st.session_state.analyzed_images:
+                            analysis, extracted_df = st.session_state.analyzed_images[img_key]
+                            st.markdown("#### Analysis")
+                            st.markdown(analysis)
+
+                            if extracted_df is not None and not extracted_df.empty:
+                                st.markdown("#### Extracted Data")
+                                st.dataframe(extracted_df, use_container_width=True)
+                                st.download_button(
+                                    "📥 Download Chart Data CSV",
+                                    data=extracted_df.to_csv(index=False),
+                                    file_name=f"chart_p{img.page_number}_i{img.image_index + 1}.csv",
+                                    mime="text/csv",
+                                    key=f"chart_csv_{i}",
+                                    use_container_width=True,
+                                )
+                        else:
+                            if st.button(
+                                "🔍 Analyze with GPT-4o Vision",
+                                key=f"analyze_img_{i}",
+                                use_container_width=True,
+                                type="primary",
+                            ):
+                                with st.spinner("Analyzing chart with GPT-4o Vision..."):
+                                    analysis, extracted_df = analyze_chart_with_vision(img)
+                                    st.session_state.analyzed_images[img_key] = (
+                                        analysis,
+                                        extracted_df,
+                                    )
+                                    st.rerun()
+            else:
+                st.info(
+                    "No charts or significant images were detected in the uploaded PDF(s). "
+                    "Small icons and logos are automatically filtered out."
+                )

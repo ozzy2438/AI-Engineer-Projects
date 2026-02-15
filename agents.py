@@ -1,6 +1,6 @@
 """
 Multi-Agent System for DocMind AI
-Provides 5 specialized agents for different document interaction modes.
+Provides 6 specialized agents for different document interaction modes.
 """
 
 from agno.models.openai import OpenAIChat
@@ -91,6 +91,27 @@ AGENT_CONFIGS: Dict[str, Dict[str, Any]] = {
             "Maintain the key information while making it accessible.",
             "If the user writes in a specific language, respond in that same language.",
             "For technical documents, provide a glossary of key terms.",
+        ],
+    },
+    "data_extractor": {
+        "name": "Data Extractor",
+        "icon": "📊",
+        "description": "Extracts tables, data points, and numerical information from documents into structured formats.",
+        "instructions": [
+            "You are a data extraction specialist for PDF documents.",
+            "Search the knowledge base for content containing tables, numbers, and data.",
+            "When extracting data:",
+            "  - Present ALL tables as clean markdown tables",
+            "  - Extract every numerical data point, statistic, and metric",
+            "  - Identify units of measurement and time periods",
+            "  - Note data sources and page references",
+            "  - Flag any data that appears inconsistent or incomplete",
+            "Structure your output as:",
+            "  1. Summary of data found",
+            "  2. Extracted tables (markdown format)",
+            "  3. Key metrics and statistics list",
+            "  4. Data quality notes",
+            "Always present data in a format that can be easily copied to a spreadsheet.",
         ],
     },
 }
