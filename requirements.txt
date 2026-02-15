@@ -1,0 +1,6 @@
+streamlit>=1.30.0
+agno>=1.0.0
+openai>=1.0.0
+python-dotenv>=1.0.0
+duckduckgo-search>=4.0.0
+pymilvus>=2.3.0
